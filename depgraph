@@ -1,0 +1,17 @@
+#!/bin/sh
+# Builds on first run and whenever sources changed, then hands over to the real launcher.
+set -e
+here=$(cd "$(dirname "$0")" && pwd)
+app="$here/build/install/depgraph/bin/depgraph"
+
+stale=""
+if [ -x "$app" ]; then
+    stale=$(find "$here/src" "$here/build.gradle.kts" -newer "$app" 2>/dev/null | head -1)
+fi
+
+if [ ! -x "$app" ] || [ -n "$stale" ]; then
+    echo "building depgraph..." >&2
+    "$here/gradlew" -p "$here" -q installDist
+fi
+
+exec "$app" "$@"
