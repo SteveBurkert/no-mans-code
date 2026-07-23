@@ -22,6 +22,16 @@ everything one class uses.
 | ![module galaxies](assets/overview.png) | ![a package up close](assets/package.png) | ![branch of one class](assets/branch.png) |
 | --- | --- | --- |
 
+## Modes
+
+- **Local project** - fly through a directory on disk: `depgraph -p ~/code/rocket-shop`, or just
+  `depgraph` inside it.
+- **GitHub repo** - clone a git url and fly through that: `depgraph https://github.com/square/okio`.
+- **Demo** - `--demo` flies the camera on its own, a screensaver for your codebase.
+- **adb** - `--adb` follows a running Android app and flies to the screen you are on.
+- **Lock screen** - `--lock` locks the screen when the window closes; with `--demo` a walk-away
+  screensaver.
+
 ## Run
 
 From a checkout (builds automatically on first run and after source changes):
