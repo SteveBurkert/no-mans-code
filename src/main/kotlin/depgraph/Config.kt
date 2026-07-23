@@ -53,6 +53,10 @@ class Config(
             return builtIn("jvm")
         }
 
+        /** Whether the project would be detected as Android, using the android config's markers. */
+        fun isAndroid(projectRoot: File): Boolean =
+            builtIn("android").detect.any { marker -> markerExists(projectRoot, marker) }
+
         fun builtIn(name: String): Config {
             val resource = Config::class.java.getResourceAsStream("/configs/$name.conf")
                 ?: error("built-in config '$name' missing from the jar")

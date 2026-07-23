@@ -24,6 +24,13 @@ class Graph(val nodes: List<Node>, val edges: List<Edge>) {
             ?: nodes.firstOrNull { it.name.equals(wanted, ignoreCase = true) }
     }
 
+    /** The file declaring a class given by its full name, matched on package and class together. */
+    fun findByFqn(fqn: String): Node? {
+        val pkg = fqn.substringBeforeLast('.', "")
+        val name = fqn.substringAfterLast('.')
+        return nodes.firstOrNull { it.pkg == pkg && (it.name == name || name in it.declared) }
+    }
+
     fun search(query: String, limit: Int): List<Node> {
         if (query.isBlank()) return emptyList()
         val needle = query.trim().lowercase()

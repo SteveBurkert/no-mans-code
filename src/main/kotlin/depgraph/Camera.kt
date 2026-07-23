@@ -6,6 +6,7 @@ import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 class Camera {
 
@@ -74,9 +75,21 @@ class Camera {
         pitch = flightFromPitch + (flightToPitch - flightFromPitch) * eased
     }
 
-    private fun cancelFlight() {
+    fun cancelFlight() {
         flightDuration = 0f
         flightElapsed = 0f
+    }
+
+    /** Turns to face [target] without moving, ending any fly-to in progress. */
+    fun pointAt(target: Vector3f) {
+        cancelFlight()
+        val dx = target.x - position.x
+        val dy = target.y - position.y
+        val dz = target.z - position.z
+        val length = sqrt(dx * dx + dy * dy + dz * dz)
+        if (length < 1e-4f) return
+        yaw = atan2(dx, -dz)
+        pitch = asin((dy / length).coerceIn(-1f, 1f))
     }
 
     private fun shortestTurn(from: Float, to: Float): Float {

@@ -21,7 +21,8 @@ class Viewer(
     startUpstream: Boolean,
     private val look: Look,
     private val demo: Boolean = false,
-    private val scope: String = "whole project"
+    private val scope: String = "whole project",
+    private val adb: Boolean = false
 ) {
 
     private val count = graph.nodes.size
@@ -46,6 +47,22 @@ class Viewer(
     private var selected = -1
     private var targeted = -1
     private var searchFocus = -1
+
+    private var adbWatcher: AdbWatcher? = null
+    private var lastAdbScreen: Screen? = null
+    private var lastAdbNode = -1
+    private var adbStartedAt = 0f
+    private var adbEverFound = false
+
+    private var highlightDeps = !adb
+    private var orbitMode = adb
+    private var orbiting = false
+    private var orbitAngle = 0f
+    private var orbitRadius = 0f
+    private var orbitHeight = 0f
+    private var orbitNode = -1
+    private val orbitCentre = Vector3f()
+    private val orbitScratch = Vector3f()
 
     private var searching = false
     private val query = StringBuilder()
@@ -172,6 +189,10 @@ class Viewer(
             applyBranch(animate = false)
         }
         frame(instant = true)
+        if (adb) {
+            adbWatcher = AdbWatcher().apply { start() }
+            adbStartedAt = glfwGetTime().toFloat()
+        }
 
         var previous = glfwGetTime()
         while (!glfwWindowShouldClose(window)) {
@@ -183,12 +204,15 @@ class Viewer(
 
             camera.update(elapsed)
             if (demo) demoFlight(elapsed) else advanceMovement(elapsed)
+            followAdb()
             advanceMorph(elapsed)
             applyDrift()
+            advanceOrbit(elapsed)
             updateTarget()
             render()
             glfwSwapBuffers(window)
         }
+        adbWatcher?.stop()
         glfwDestroyWindow(window)
         glfwTerminate()
     }
@@ -305,6 +329,7 @@ class Viewer(
             return
         }
         if (!captured) return
+        orbiting = false
         camera.turn(deltaX * LOOK_SPEED, -deltaY * LOOK_SPEED)
     }
 
@@ -369,6 +394,11 @@ class Viewer(
             GLFW_KEY_Q -> glfwSetWindowShouldClose(window, true)
             GLFW_KEY_H, GLFW_KEY_F1 -> showHelp = !showHelp
             GLFW_KEY_TAB -> showLabels = !showLabels
+            GLFW_KEY_L -> highlightDeps = !highlightDeps
+            GLFW_KEY_O -> {
+                orbitMode = !orbitMode
+                if (orbitMode && selected >= 0) startOrbit(selected) else orbiting = false
+            }
             GLFW_KEY_B -> if (selected >= 0) branchFrom(selected, upstream = false)
             GLFW_KEY_U -> if (selected >= 0) branchFrom(selected, upstream = true)
             GLFW_KEY_R -> resetToWhole()
@@ -427,6 +457,8 @@ class Viewer(
         autoSpeed += (wanted - autoSpeed) * min(1f, 4f * elapsed)
         val boost = if (down(GLFW_KEY_LEFT_SHIFT) || down(GLFW_KEY_RIGHT_SHIFT)) 5f else 1f
         val step = baseSpeed * speedScale * autoSpeed * boost * elapsed
+        if (down(GLFW_KEY_W) || down(GLFW_KEY_S) || down(GLFW_KEY_A) || down(GLFW_KEY_D) ||
+            down(GLFW_KEY_SPACE) || down(GLFW_KEY_C) || down(GLFW_KEY_LEFT_CONTROL)) orbiting = false
         if (down(GLFW_KEY_W)) camera.move(camera.forward(), step)
         if (down(GLFW_KEY_S)) camera.move(camera.forward(), -step)
         if (down(GLFW_KEY_D)) camera.move(camera.right(), step)
@@ -499,6 +531,35 @@ class Viewer(
         demoAge = 0f
         demoLifetime = 16f + demoRandom.nextFloat() * 10f
     }
+
+    /**
+     * Follows the device's foreground screen: when adb reports a new activity that maps to a file,
+     * selects it and flies there. A screen that stays put is left alone, so the user keeps full
+     * control between changes.
+     */
+    private fun followAdb() {
+        val screen = adbWatcher?.screen ?: return
+        if (screen === lastAdbScreen) return
+        lastAdbScreen = screen
+        val node = resolveScreen(screen) ?: return
+        adbEverFound = true
+        if (node.id == lastAdbNode) return
+        lastAdbNode = node.id
+        if (!visible[node.id]) resetToWhole()
+        select(node.id)
+        flyToNode(node.id)
+    }
+
+    /**
+     * The file a foreground screen maps to, or null when it is not this project. The activity's
+     * full name must match a file exactly, which both rejects other apps and ignores the flavor's
+     * applicationId.
+     */
+    private fun resolveScreen(screen: Screen): Node? = graph.findByFqn(screen.activity)
+
+    /** True once adb has run a while without ever matching a screen to a file. */
+    private fun adbWaiting(): Boolean =
+        adbWatcher != null && !adbEverFound && now - adbStartedAt > ADB_WAIT_SECONDS
 
     private fun select(id: Int) {
         searchFocus = -1
@@ -583,6 +644,11 @@ class Viewer(
     }
 
     private fun flyToNode(id: Int) {
+        if (orbitMode) {
+            startOrbit(id)
+            return
+        }
+        orbiting = false
         camera.flyTo(
             origin.set(morphTo[id * 3], morphTo[id * 3 + 1], morphTo[id * 3 + 2]),
             nodeSize[id] * 9f + 30f,
@@ -591,10 +657,67 @@ class Viewer(
     }
 
     /**
+     * Eases the camera to a package-scale distance around the selected file's package and circles
+     * it slowly, always looking at the file. Manual flying drops back out of the orbit.
+     */
+    private fun startOrbit(id: Int) {
+        orbitNode = id
+        val node = graph.nodes[id]
+        var centreX = 0f
+        var centreY = 0f
+        var centreZ = 0f
+        var members = 0
+        for (other in graph.nodes) {
+            if (!visible[other.id] || other.module != node.module || other.pkg != node.pkg) continue
+            centreX += morphTo[other.id * 3]
+            centreY += morphTo[other.id * 3 + 1]
+            centreZ += morphTo[other.id * 3 + 2]
+            members++
+        }
+        if (members == 0) {
+            centreX = morphTo[id * 3]
+            centreY = morphTo[id * 3 + 1]
+            centreZ = morphTo[id * 3 + 2]
+            members = 1
+        }
+        centreX /= members
+        centreY /= members
+        centreZ /= members
+        var reachSquared = 0f
+        for (other in graph.nodes) {
+            if (!visible[other.id] || other.module != node.module || other.pkg != node.pkg) continue
+            val dx = morphTo[other.id * 3] - centreX
+            val dy = morphTo[other.id * 3 + 1] - centreY
+            val dz = morphTo[other.id * 3 + 2] - centreZ
+            val squared = dx * dx + dy * dy + dz * dz
+            if (squared > reachSquared) reachSquared = squared
+        }
+        orbitCentre.set(centreX, centreY, centreZ)
+        orbitRadius = max(sqrt(reachSquared) * 1.9f + 70f, nodeSize[id] * 6f + 90f)
+        orbitHeight = orbitRadius * 0.32f
+        orbitAngle = kotlin.math.atan2(camera.position.z - centreZ, camera.position.x - centreX)
+        orbiting = true
+        camera.cancelFlight()
+    }
+
+    private fun advanceOrbit(elapsed: Float) {
+        if (!orbiting) return
+        orbitAngle += ORBIT_SPEED * elapsed
+        orbitScratch.set(
+            orbitCentre.x + kotlin.math.cos(orbitAngle) * orbitRadius,
+            orbitCentre.y + orbitHeight,
+            orbitCentre.z + kotlin.math.sin(orbitAngle) * orbitRadius
+        )
+        camera.position.lerp(orbitScratch, min(1f, ORBIT_EASE * elapsed))
+        camera.pointAt(origin.set(positions[orbitNode * 3], positions[orbitNode * 3 + 1], positions[orbitNode * 3 + 2]))
+    }
+
+    /**
      * Frames the bulk of the graph, not its bounding sphere: one far-flung cluster would
      * otherwise push the camera so far back that everything else shrinks to a speck.
      */
     private fun frame(instant: Boolean) {
+        orbiting = false
         var counted = 0
         for (id in 0 until count) if (visible[id]) counted++
         if (counted == 0) return
@@ -763,9 +886,10 @@ class Viewer(
                         red = 1f
                         green = 1f
                         blue = 1f
-                        size *= 2.4f
-                        intensity = 1.9f
+                        size *= 1.7f
+                        intensity = 1.5f
                     }
+                    !highlightDeps -> {}
                     neighbour[id] -> intensity = 1.4f
                     else -> intensity = 0.3f
                 }
@@ -792,7 +916,7 @@ class Viewer(
     private fun appendHaze(written: Int): Int {
         var total = written
         if (total <= Layout.DIRECT_LIMIT) return total
-        val dimmed = if (selected >= 0) 0.35f else 1f
+        val dimmed = if (selected >= 0 && highlightDeps) 0.35f else 1f
         for (group in 0 until hazeGroupCount) {
             val from = hazeStart[group]
             val end = hazeStart[group + 1]
@@ -837,10 +961,10 @@ class Viewer(
         var written = 0
         for (edge in graph.edges) {
             if (!visible[edge.from] || !visible[edge.to]) continue
-            val touching = selected >= 0 && (edge.from == selected || edge.to == selected)
+            val touching = selected >= 0 && highlightDeps && (edge.from == selected || edge.to == selected)
             val brightness = when {
                 touching -> 1.7f
-                selected >= 0 -> 0.07f
+                selected >= 0 && highlightDeps -> 0.07f
                 else -> look.edgeBrightness
             }
             // highlighted lines must stay visible across space, so they skip the distance fade
@@ -954,7 +1078,7 @@ class Viewer(
                     nodeColour[id * 3],
                     nodeColour[id * 3 + 1],
                     nodeColour[id * 3 + 2],
-                    if (selected >= 0 && !neighbour[id]) 0.35f else 0.85f
+                    if (selected >= 0 && highlightDeps && !neighbour[id]) 0.35f else 0.85f
                 )
             }
             overlay.text(screenX - width / 2f, screenY + 9f, LABEL_SIZE, colour, node.name)
@@ -972,7 +1096,7 @@ class Viewer(
     }
 
     private fun drawHud() {
-        panel(MARGIN, MARGIN, infoLines())
+        drawInfo()
 
         if (selected >= 0) {
             val lines = selectionLines()
@@ -1007,6 +1131,8 @@ class Viewer(
 
     private fun infoLines(): List<String> {
         val mode = when {
+            root < 0 && adbWaiting() -> "no matching screen on device"
+            root < 0 && adbWatcher != null -> "following device"
             root < 0 -> scope
             upstream -> "used by ${graph.nodes[root].name}${depthLabel()}"
             else -> "used from ${graph.nodes[root].name}${depthLabel()}"
@@ -1076,6 +1202,22 @@ class Viewer(
         }
     }
 
+    /** Like [panel] for the top-left readout, but paints the adb-waiting line red and bold. */
+    private fun drawInfo() {
+        val lines = infoLines()
+        overlay.rect(MARGIN, MARGIN, panelWidth(lines), panelHeight(lines), PANEL)
+        lines.forEachIndexed { index, line ->
+            val x = MARGIN + PADDING
+            val y = MARGIN + PADDING + index * LINE_STEP
+            if (index == MODE_LINE && root < 0 && adbWaiting()) {
+                overlay.text(x, y, BODY, ERROR, line)
+                overlay.text(x + 0.7f, y, BODY, ERROR, line)
+            } else {
+                overlay.text(x, y, BODY, if (index == 0) WHITE else TEXT, line)
+            }
+        }
+    }
+
     private fun panelWidth(lines: List<String>): Float =
         lines.maxOf { overlay.textWidth(it, BODY) } + PADDING * 2
 
@@ -1115,6 +1257,8 @@ class Viewer(
         const val LABEL_CUTOFF = 0.0009f
         const val MAX_SHOWN_DEPTH = 12
         const val AIM_THRESHOLD = 0.9988f
+        const val ORBIT_SPEED = 0.12f
+        const val ORBIT_EASE = 2.2f
 
         const val MARGIN = 16f
         const val PADDING = 10f
@@ -1123,6 +1267,8 @@ class Viewer(
         const val LABEL_SIZE = 17f
         const val LINE_STEP = 21f
         const val ROW_HEIGHT = 26f
+        const val MODE_LINE = 1
+        const val ADB_WAIT_SECONDS = 20f
         const val HELP_HINT = "H  help"
 
         val HELP = listOf(
@@ -1137,6 +1283,8 @@ class Viewer(
             "[  ]          branch depth",
             "R             back to whole project and overview camera",
             "F             fly to selection, after a search select its hit",
+            "L             light select, keep the rest of the graph lit",
+            "O             orbit the selection's package instead of flying close",
             "/             search",
             "tab           labels on/off",
             "esc           release mouse, click to fly again",
@@ -1150,6 +1298,7 @@ class Viewer(
         val TEXT = Colour(0.74f, 0.80f, 0.92f, 0.95f)
         val DIM = Colour(0.55f, 0.62f, 0.78f, 0.8f)
         val AIM = Colour(0.45f, 0.95f, 1f, 0.98f)
+        val ERROR = Colour(1f, 0.34f, 0.34f, 0.98f)
         val CROSSHAIR = Colour(0.6f, 0.7f, 0.9f, 0.45f)
         val PANEL = Colour(0.03f, 0.05f, 0.11f, 0.72f)
         val PANEL_STRONG = Colour(0.05f, 0.08f, 0.16f, 0.92f)

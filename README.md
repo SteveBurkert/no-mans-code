@@ -71,6 +71,7 @@ jar, for example), a folder chooser asks which project to explore.
         --demo            fullscreen self-flying tour, any input quits (screensaver)
         --lock            lock the screen when the window closes; with --demo whoever
                           stops the tour has to unlock
+        --adb             follow a connected device's foreground screen and fly to it
     -h, --help            show help
 
 `--demo --lock` is the manual screensaver: start it before walking away, anyone who touches
@@ -93,6 +94,26 @@ its own location, so nothing else is needed:
 
 Without `-p` it takes the current directory as the project, so `depgraph --demo --lock`
 inside a project is the shortest form. The alias does not need the PATH entry.
+
+## Follow a running app
+
+    ./depgraph -p ~/code/rocket-shop --adb
+
+With `--adb` depgraph watches a connected device over adb and flies to whatever screen is in
+the foreground, moving on its own as you drive the app on the device. You keep flying and
+looking around the whole time; the camera only takes over again when the screen changes. Pair
+it with `-p`. It needs adb on the PATH and one device attached, and cannot be combined with
+`-m`, `--package`, a class name or `--demo`.
+
+The foreground activity is matched by its class, read from `dumpsys activity activities`, against
+the project's files. The class name is the source name (`com.rob.plantix.MainActivity`), so the
+flavor's applicationId (`com.peat.plantix.alpha`) never enters into it, and another app's screen is
+ignored because its class is not in the graph. It follows moves between activities; navigation that
+only swaps a fragment inside one activity is not tracked. If twenty seconds pass without a single
+screen matching a file, the top-left readout says so in red until the first match.
+
+Under `--adb` the star is light-selected (marked without dimming the rest of the graph) and the
+camera orbits the screen's package instead of flying in close. Toggle either with `L` and `O`.
 
 ## Configs
 
@@ -131,6 +152,8 @@ the tuned values, so a config only lists what it changes.
     [  ]            branch depth
     R               back to the whole project and the overview camera
     F               fly to the selection; right after a search, select its hit
+    L               light select: mark the star without dimming the rest
+    O               orbit the selection's package instead of flying in close
     /               search classes, files and modules
     tab             labels on / off
     esc             release the mouse

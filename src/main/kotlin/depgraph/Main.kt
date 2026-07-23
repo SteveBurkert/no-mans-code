@@ -28,6 +28,9 @@ options:
       --demo           fullscreen self-flying tour, any input quits (screensaver)
       --lock           lock the screen when the window closes; with --demo whoever
                        stops the tour has to unlock
+      --adb            follow the foreground Android screen on a connected device and
+                       fly to it, keeping up as you move through the app. Needs adb and
+                       a device. Not with -m, --package, a class name or --demo.
   -h, --help           show this help
 """
 
@@ -56,6 +59,13 @@ fun main(args: Array<String>) {
         exitProcess(1)
     }
 
+    if (options.adb && !options.projectGiven && options.projectUrl == null && !Config.isAndroid(project)) {
+        System.err.println("--adb needs an Android project, but this is not one:")
+        System.err.println("  $project")
+        System.err.println("point at an Android app with -p")
+        exitProcess(1)
+    }
+
     val config = options.config?.let { Config.load(it) } ?: Config.detect(project)
     println("config: ${config.name}")
 
@@ -76,7 +86,8 @@ fun main(args: Array<String>) {
         printStats(branchOf(scoped, root, options))
         return
     }
-    Viewer(scoped, project.name, root, options.depth, options.upstream, config.look, options.demo, scope)
+    if (options.adb) println("adb: watching a connected device for the app's screens")
+    Viewer(scoped, project.name, root, options.depth, options.upstream, config.look, options.demo, scope, options.adb)
         .run()
     if (options.lock) lockScreen()
 }
@@ -275,7 +286,8 @@ class Options(
     val includeTests: Boolean,
     val statsOnly: Boolean,
     val demo: Boolean,
-    val lock: Boolean
+    val lock: Boolean,
+    val adb: Boolean
 ) {
     companion object {
         fun parse(args: Array<String>): Options? {
@@ -292,6 +304,7 @@ class Options(
             var statsOnly = false
             var demo = false
             var lock = false
+            var adb = false
 
             var index = 0
             while (index < args.size) {
@@ -318,6 +331,7 @@ class Options(
                     "-s", "--stats" -> statsOnly = true
                     "--demo" -> demo = true
                     "--lock" -> lock = true
+                    "--adb" -> adb = true
                     else -> {
                         if (argument.startsWith("-")) fail("unknown option '$argument', try --help")
                         if (isRepositoryUrl(argument)) projectUrl = argument else rootClass = argument
@@ -325,9 +339,12 @@ class Options(
                 }
                 index++
             }
+            if (adb && (module != null || pkg != null || rootClass != null || demo)) {
+                fail("--adb cannot be combined with -m, --package, a class name or --demo")
+            }
             return Options(
                 project, projectGiven, projectUrl, config, module, pkg, rootClass, depth, upstream,
-                includeTests, statsOnly, demo, lock
+                includeTests, statsOnly, demo, lock, adb
             )
         }
 
