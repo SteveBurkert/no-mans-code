@@ -97,13 +97,14 @@ inside a project is the shortest form. The alias does not need the PATH entry.
 
 ## Follow a running app
 
-    ./depgraph -p ~/code/rocket-shop --adb
+    ./depgraph --adb                          # inside the app's own project
+    ./depgraph -p ~/code/rocket-shop --adb    # or point at it
 
-With `--adb` depgraph watches a connected device over adb and flies to whatever screen is in
-the foreground, moving on its own as you drive the app on the device. You keep flying and
-looking around the whole time; the camera only takes over again when the screen changes. Pair
-it with `-p`. It needs adb on the PATH and one device attached, and cannot be combined with
-`-m`, `--package`, a class name or `--demo`.
+With `--adb` depgraph watches a connected device over adb and flies to the app's current screen,
+following along on its own as you move through the app. Grab the controls any time (WASD or the
+mouse) and it hands back to you until the next screen change. depgraph has to be pointed at the
+app you are driving, so run it inside that project or pass `-p`; it needs adb on the PATH and one
+device attached, and cannot be combined with `-m`, `--package`, a class name or `--demo`.
 
 The foreground activity is matched by its class, read from `dumpsys activity activities`, against
 the project's files. The class name is the source name (`com.rob.plantix.MainActivity`), so the
@@ -112,8 +113,8 @@ ignored because its class is not in the graph. It follows moves between activiti
 only swaps a fragment inside one activity is not tracked. If twenty seconds pass without a single
 screen matching a file, the top-left readout says so in red until the first match.
 
-Under `--adb` the star is light-selected (marked without dimming the rest of the graph) and the
-camera orbits the screen's package instead of flying in close. Toggle either with `L` and `O`.
+By default `--adb` light-selects the screen's star (marked without dimming the rest of the graph)
+and slowly orbits its package instead of flying in close. Toggle either with `L` and `O`.
 
 ## Configs
 
